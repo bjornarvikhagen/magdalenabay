@@ -66,13 +66,24 @@ export class Scraper {
       );
 
       try {
-        await page.goto(eventUrl, {
+        console.log(`[${this.config.eventId}] Navigating to ${eventUrl}`);
+        const response = await page.goto(eventUrl, {
           waitUntil: "domcontentloaded",
           timeout: 30000,
         });
+        console.log(
+          `[${this.config.eventId}] Page loaded, status: ${response?.status()}`
+        );
 
         // Give page time to fully settle
+        console.log(
+          `[${this.config.eventId}] Waiting 5s for page to settle...`
+        );
         await page.waitForTimeout(5000);
+
+        console.log(
+          `[${this.config.eventId}] Starting browser-context fetch...`
+        );
 
         // Fetch resale data directly from browser context
         const resaleData = await page.evaluate(async (eventId) => {
@@ -89,14 +100,21 @@ export class Scraper {
             });
 
             console.log("[Browser] Response status:", response.status);
+            console.log(
+              "[Browser] Response headers:",
+              JSON.stringify([...response.headers.entries()])
+            );
 
             if (!response.ok) {
+              const text = await response.text();
               console.log(
                 "[Browser] Response not OK:",
                 response.status,
-                response.statusText
+                response.statusText,
+                "Body:",
+                text.substring(0, 500)
               );
-              return null;
+              return { error: true, status: response.status, body: text };
             }
 
             const data = await response.json();
@@ -105,17 +123,48 @@ export class Scraper {
               data?.offers?.length || 0,
               "offers"
             );
+            console.log(
+              "[Browser] Full response:",
+              JSON.stringify(data).substring(0, 1000)
+            );
             return data;
           } catch (e) {
-            console.error("[Browser] Fetch error:", e);
-            return null;
+            console.error(
+              "[Browser] Fetch error:",
+              e instanceof Error ? e.message : String(e)
+            );
+            console.error(
+              "[Browser] Fetch error stack:",
+              e instanceof Error ? e.stack : ""
+            );
+            return {
+              error: true,
+              message: e instanceof Error ? e.message : String(e),
+            };
           }
         }, this.config.eventId);
 
-        if (resaleData) {
+        console.log(
+          `[${this.config.eventId}] Fetch complete, processing result...`
+        );
+        console.log(`[${this.config.eventId}] Result type:`, typeof resaleData);
+        console.log(
+          `[${this.config.eventId}] Result keys:`,
+          resaleData ? Object.keys(resaleData) : "null"
+        );
+
+        if (resaleData && !resaleData.error) {
+          console.log(`[${this.config.eventId}] Processing resale data...`);
           await this.processResaleData(resaleData);
+        } else if (resaleData && resaleData.error) {
+          console.log(
+            `[${this.config.eventId}] API returned error:`,
+            JSON.stringify(resaleData)
+          );
         } else {
-          console.log(`[${this.config.eventId}] No resale data found`);
+          console.log(
+            `[${this.config.eventId}] No resale data found (null/undefined)`
+          );
         }
       } catch (error) {
         console.error(`[${this.config.eventId}] Error:`, error);
