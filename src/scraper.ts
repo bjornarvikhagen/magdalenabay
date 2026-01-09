@@ -37,7 +37,16 @@ export class Scraper {
 
     this.browser = await chromium.launch({
       headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-accelerated-2d-canvas",
+        "--no-first-run",
+        "--no-zygote",
+        "--single-process",
+        "--disable-gpu",
+      ],
     });
 
     const context = await this.browser.newContext({
@@ -58,12 +67,12 @@ export class Scraper {
 
       try {
         await page.goto(eventUrl, {
-          waitUntil: "networkidle",
-          timeout: 60000,
+          waitUntil: "domcontentloaded",
+          timeout: 30000,
         });
 
         // Give page time to fully settle
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(5000);
 
         // Fetch resale data directly from browser context
         const resaleData = await page.evaluate(async (eventId) => {
@@ -110,9 +119,20 @@ export class Scraper {
         }
       } catch (error) {
         console.error(`[${this.config.eventId}] Error:`, error);
+
+        // If browser died, try to restart
+        if (!this.browser?.isConnected()) {
+          console.log(
+            `[${this.config.eventId}] Browser disconnected, stopping`
+          );
+          this.running = false;
+          break;
+        }
       }
 
-      await page.waitForTimeout(pollMs);
+      if (this.running) {
+        await page.waitForTimeout(pollMs);
+      }
     }
   }
 
