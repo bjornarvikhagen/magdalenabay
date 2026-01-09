@@ -5,8 +5,15 @@ import {
   Routes,
   SlashCommandBuilder,
   ChatInputCommandInteraction,
+  MessageFlags,
 } from "discord.js";
 import { Scraper, type TicketInfo } from "./scraper";
+import {
+  loadWatches,
+  saveWatch,
+  deleteWatch,
+  type WatchData,
+} from "./persistence";
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN!;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID!;
@@ -39,6 +46,42 @@ export class DiscordBot {
     });
 
     console.log("Discord bot connected");
+
+    // Restore saved watches
+    await this.restoreWatches();
+  }
+
+  private async restoreWatches() {
+    const savedWatches = loadWatches();
+    if (savedWatches.length === 0) {
+      console.log("No saved watches to restore");
+      return;
+    }
+
+    console.log(`Restoring ${savedWatches.length} saved watches...`);
+    for (const watch of savedWatches) {
+      this.startWatch(watch);
+    }
+  }
+
+  private startWatch(watch: WatchData) {
+    const scraper = new Scraper({
+      eventId: watch.eventId,
+      pollMinutes: watch.pollMinutes,
+      onTicketsFound: (info) => this.notifyTickets(watch.eventId, info),
+    });
+
+    this.watches.set(watch.eventId, {
+      ...watch,
+      scraper,
+    });
+
+    scraper.start();
+    console.log(`Started watching ${watch.eventId}`);
+  }
+
+  private persistWatch(watch: WatchData) {
+    saveWatch(watch);
   }
 
   private async registerCommands() {
@@ -106,7 +149,7 @@ export class DiscordBot {
     if (this.watches.has(eventId)) {
       await interaction.reply({
         content: `Følger allerede event ${eventId}`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -117,21 +160,15 @@ export class DiscordBot {
       .map((id) => id.trim().replace(/[<@!>]/g, ""))
       .filter((id) => id);
 
-    const scraper = new Scraper({
-      eventId,
-      pollMinutes,
-      onTicketsFound: (info) => this.notifyTickets(eventId, info),
-    });
-
-    this.watches.set(eventId, {
+    const watchData = {
       eventId,
       channelId: interaction.channelId,
       pingUsers,
       pollMinutes,
-      scraper,
-    });
+    };
 
-    scraper.start();
+    this.startWatch(watchData);
+    this.persistWatch(watchData);
 
     const eventUrl = `https://www.ticketmaster.no/event/${eventId}`;
     const mentions = pingUsers.map((id) => `<@${id}>`).join(", ");
@@ -150,7 +187,7 @@ export class DiscordBot {
     if (this.watches.size === 0) {
       await interaction.reply({
         content: "Ingen aktive jobber",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -167,7 +204,7 @@ export class DiscordBot {
 
     await interaction.reply({
       content: `**Aktive jobber (${this.watches.size})**\n\n${list}`,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 
@@ -178,15 +215,21 @@ export class DiscordBot {
     if (!watch) {
       await interaction.reply({
         content: `Følger ikke event ${eventId}`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
-    await watch.scraper.stop();
-    this.watches.delete(eventId);
+    // Reply immediately, then stop scraper in background
+    await interaction.reply(`Stopper overvåking av event ${eventId}...`);
 
-    await interaction.reply(`Stoppet overvåking av event ${eventId}`);
+    // Stop scraper without blocking
+    watch.scraper.stop().catch((error) => {
+      console.error(`Error stopping scraper for ${eventId}:`, error);
+    });
+
+    this.watches.delete(eventId);
+    deleteWatch(eventId);
   }
 
   private async notifyTickets(eventId: string, info: TicketInfo) {

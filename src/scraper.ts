@@ -56,31 +56,49 @@ export class Scraper {
 
       try {
         await page.goto(eventUrl, {
-          waitUntil: "domcontentloaded",
+          waitUntil: "networkidle",
           timeout: 30000,
         });
 
-        await page.waitForTimeout(3000);
+        // Wait a moment for any dynamic content
+        await page.waitForTimeout(1000);
 
-        const resaleData = await page.evaluate(async (eventId) => {
-          try {
-            const response = await fetch(
-              `https://availability.ticketmaster.no/api/v2/TM_NO/resale/${eventId}`,
-              {
-                method: "GET",
-                headers: {
-                  Accept: "application/json",
-                },
-                credentials: "include",
-              }
-            );
+        const resaleData = await page
+          .evaluate(async (eventId) => {
+            try {
+              const response = await fetch(
+                `https://availability.ticketmaster.no/api/v2/TM_NO/resale/${eventId}`,
+                {
+                  method: "GET",
+                  headers: {
+                    Accept: "application/json",
+                  },
+                  credentials: "include",
+                }
+              );
 
-            if (!response.ok) return null;
-            return await response.json();
-          } catch (e) {
-            return null;
-          }
-        }, this.config.eventId);
+              if (!response.ok) return null;
+              return await response.json();
+            } catch (e) {
+              return null;
+            }
+          }, this.config.eventId)
+          .catch((error) => {
+            // Handle navigation during evaluate - retry once
+            if (
+              error.message.includes("Execution context was destroyed") ||
+              error.message.includes("Target closed") ||
+              error.message.includes(
+                "Target page, context or browser has been closed"
+              )
+            ) {
+              console.warn(
+                `[${this.config.eventId}] Page navigated during evaluation, will retry next cycle`
+              );
+              return null;
+            }
+            throw error;
+          });
 
         if (resaleData) {
           await this.processResaleData(resaleData);
@@ -133,6 +151,24 @@ export class Scraper {
 
   async stop() {
     this.running = false;
-    await this.browser?.close();
+    if (this.browser) {
+      try {
+        // Close browser with timeout to prevent hanging
+        await Promise.race([
+          this.browser.close(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Browser close timeout")), 5000)
+          ),
+        ]);
+      } catch (error) {
+        console.warn(`[${this.config.eventId}] Error closing browser:`, error);
+        // Force close if graceful close fails
+        try {
+          await this.browser.close({ timeout: 1000 });
+        } catch {
+          // Ignore force close errors
+        }
+      }
+    }
   }
 }
