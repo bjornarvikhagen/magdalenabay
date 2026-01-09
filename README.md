@@ -62,3 +62,25 @@ Example:
 
 - **Event ID**: From Ticketmaster URL `ticketmaster.no/event/[EVENT_ID]`
 - **User ID**: Enable Developer Mode in Discord settings → right-click user → Copy ID
+
+## Docker Deployment
+
+Build and run with Docker:
+
+```bash
+docker build -t tickets .
+docker run -d --env-file .env --name tickets tickets
+```
+
+Or use docker-compose:
+
+```bash
+docker-compose up -d
+```
+
+View logs:
+```bash
+docker logs -f tickets
+# or
+docker-compose logs -f
+```
